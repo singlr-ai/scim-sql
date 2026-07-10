@@ -78,6 +78,13 @@ class NormalizationTest {
   }
 
   @Test
+  @DisplayName("string continuation normalizes to a single line")
+  void shouldStaySingleLine() {
+    assertEquals("select 'a' 'b'", normalize("SELECT 'a'\n'b'"));
+    assertEquals(-1, normalize("SELECT 'a'\n'b'\n'c' FROM t").indexOf('\n'));
+  }
+
+  @Test
   @DisplayName("normalization keeps dollar-quoted content verbatim")
   void shouldPreserveDollarQuotedContent() {
     var normalized = normalize("SELECT $tag$Keep CASE and -- fake comment$tag$");

@@ -199,7 +199,7 @@ public final class PostgresQueryAnalyzer {
         continue;
       }
       if (!normalized.isEmpty() && !insideDollarString(previousType, type)) {
-        normalized.append(isStringLiteral(previousType) && isStringLiteral(type) ? '\n' : ' ');
+        normalized.append(' ');
       }
       var text = token.getText();
       normalized.append(
@@ -213,13 +213,5 @@ public final class PostgresQueryAnalyzer {
     return (previousType == PostgreSQLLexer.BeginDollarStringConstant
             || previousType == PostgreSQLLexer.DollarText)
         && (type == PostgreSQLLexer.DollarText || type == PostgreSQLLexer.EndDollarStringConstant);
-  }
-
-  private static boolean isStringLiteral(int type) {
-    return type == PostgreSQLLexer.StringConstant
-        || type == PostgreSQLLexer.EscapeStringConstant
-        || type == PostgreSQLLexer.UnicodeEscapeStringConstant
-        || type == PostgreSQLLexer.BinaryStringConstant
-        || type == PostgreSQLLexer.HexadecimalStringConstant;
   }
 }

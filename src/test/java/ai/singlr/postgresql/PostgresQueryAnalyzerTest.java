@@ -500,6 +500,77 @@ class PostgresQueryAnalyzerTest {
   }
 
   @Test
+  @DisplayName("ddl targeting a relation through an object name reports the relation")
+  void shouldReportAnyNameRelationTargets() {
+    var expected =
+        List.of(new RelationReference("private", "users", null, RelationReference.Kind.PHYSICAL));
+
+    assertEquals(
+        expected,
+        PostgresQueryAnalyzer.analyze("COMMENT ON TABLE private.users IS 'x'").relations());
+    assertEquals(
+        expected,
+        PostgresQueryAnalyzer.analyze("SECURITY LABEL ON TABLE private.users IS 'x'").relations());
+    assertEquals(
+        expected, PostgresQueryAnalyzer.analyze("DROP TRIGGER tr ON private.users").relations());
+    assertEquals(
+        expected,
+        PostgresQueryAnalyzer.analyze("DROP POLICY IF EXISTS p ON private.users").relations());
+    assertEquals(
+        expected, PostgresQueryAnalyzer.analyze("DROP RULE r ON private.users").relations());
+    assertEquals(
+        expected,
+        PostgresQueryAnalyzer.analyze("COMMENT ON CONSTRAINT c ON private.users IS 'x'")
+            .relations());
+    assertEquals(
+        expected,
+        PostgresQueryAnalyzer.analyze("COMMENT ON TRIGGER tr ON private.users IS 'x'").relations());
+  }
+
+  @Test
+  @DisplayName("comment and security label on a column report the relation and column")
+  void shouldReportColumnTargetRelations() {
+    var comment = PostgresQueryAnalyzer.analyze("COMMENT ON COLUMN private.users.email IS 'x'");
+
+    assertEquals(
+        List.of(new RelationReference("private", "users", null, RelationReference.Kind.PHYSICAL)),
+        comment.relations());
+    assertEquals(List.of(new ColumnReference("private.users", "email")), comment.columns());
+    assertEquals(
+        List.of(new RelationReference(null, "users", null, RelationReference.Kind.PHYSICAL)),
+        PostgresQueryAnalyzer.analyze("SECURITY LABEL ON COLUMN users.email IS 'x'").relations());
+  }
+
+  @Test
+  @DisplayName("comments on non-relation objects report no relations")
+  void shouldNotReportNonRelationAnyNameTargets() {
+    assertEquals(
+        List.of(), PostgresQueryAnalyzer.analyze("COMMENT ON SEQUENCE s IS 'x'").relations());
+    assertEquals(
+        List.of(),
+        PostgresQueryAnalyzer.analyze("COMMENT ON CONSTRAINT c ON DOMAIN d IS 'x'").relations());
+    assertEquals(
+        List.of(),
+        PostgresQueryAnalyzer.analyze("COMMENT ON OPERATOR CLASS oc USING btree IS 'x'")
+            .relations());
+    assertEquals(
+        List.of(),
+        PostgresQueryAnalyzer.analyze("SECURITY LABEL ON SEQUENCE s IS 'x'").relations());
+  }
+
+  @Test
+  @DisplayName("statements nested in a function body do not add to the statement count")
+  void shouldNotCountFunctionBodyStatements() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "CREATE PROCEDURE p() LANGUAGE SQL BEGIN ATOMIC"
+                + " DELETE FROM audit; INSERT INTO audit VALUES (1); END");
+
+    assertEquals(1, analysis.statementCount());
+    assertTrue(analysis.relations().stream().anyMatch(relation -> relation.name().equals("audit")));
+  }
+
+  @Test
   @DisplayName("string constants separated by a newline concatenate as in postgresql")
   void shouldAcceptNewlineConcatenatedStrings() {
     assertEquals(1, PostgresQueryAnalyzer.analyze("SELECT 'a'\n'b'").statementCount());

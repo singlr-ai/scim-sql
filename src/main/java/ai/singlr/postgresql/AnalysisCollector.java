@@ -7,7 +7,9 @@ package ai.singlr.postgresql;
 
 import ai.singlr.postgresql.parser.PostgreSQLParser;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Alias_clauseContext;
+import ai.singlr.postgresql.parser.PostgreSQLParser.Any_nameContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.ColumnrefContext;
+import ai.singlr.postgresql.parser.PostgreSQLParser.CommentstmtContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Common_table_exprContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.DeletestmtContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.DropstmtContext;
@@ -26,6 +28,7 @@ import ai.singlr.postgresql.parser.PostgreSQLParser.Into_clauseContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Join_qualContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Locked_rels_listContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.MergestmtContext;
+import ai.singlr.postgresql.parser.PostgreSQLParser.Object_type_any_nameContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Over_clauseContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.PlsqlvariablenameContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Qualified_nameContext;
@@ -33,6 +36,7 @@ import ai.singlr.postgresql.parser.PostgreSQLParser.Qualified_name_listContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Relation_exprContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Relation_expr_opt_aliasContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.RootContext;
+import ai.singlr.postgresql.parser.PostgreSQLParser.SeclabelstmtContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Select_clauseContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Select_no_parensContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Select_with_parensContext;
@@ -76,9 +80,10 @@ final class AnalysisCollector {
           "revokestmt",
           "grantrolestmt",
           "revokerolestmt",
-          "importforeignschemastmt");
+          "importforeignschemastmt",
+          "reassignownedstmt");
 
-  private static final Set<String> RELATION_DROP_TYPES =
+  private static final Set<String> RELATION_OBJECT_TYPES =
       Set.of("table", "view", "materializedview", "foreigntable");
 
   private final List<RelationReference> relations = new ArrayList<>();
@@ -199,7 +204,9 @@ final class AnalysisCollector {
   private void inspect(ParseTree node, Set<String> cteScope) {
     switch (node) {
       case Qualified_nameContext relation -> addRelation(relation, cteScope);
-      case DropstmtContext drop -> addDroppedRelations(drop);
+      case DropstmtContext drop -> addDropTargets(drop);
+      case CommentstmtContext comment -> addCommentTargets(comment);
+      case SeclabelstmtContext label -> addSecurityLabelTargets(label);
       case ColumnrefContext column -> addColumn(column);
       case Func_applicationContext call -> addFunction(call);
       case Func_expr_common_subexprContext special ->
@@ -281,28 +288,82 @@ final class AnalysisCollector {
     relations.add(new RelationReference(schema, name, aliasFor(relation), kind));
   }
 
-  private void addDroppedRelations(DropstmtContext drop) {
-    if (drop.object_type_any_name() == null
-        || drop.any_name_list_() == null
-        || !RELATION_DROP_TYPES.contains(asciiLowercase(drop.object_type_any_name().getText()))) {
+  private void addDropTargets(DropstmtContext drop) {
+    if (drop.object_type_name_on_any_name() != null && drop.any_name() != null) {
+      addAnyNameRelation(drop.any_name());
+      return;
+    }
+    if (drop.any_name_list_() == null || !isRelationTarget(drop.object_type_any_name())) {
       return;
     }
     for (var anyName : drop.any_name_list_().any_name()) {
-      List<String> parts = new ArrayList<>();
-      parts.add(identifierText(anyName.colid()));
-      if (anyName.attrs() != null) {
-        for (var attr : anyName.attrs().attr_name()) {
-          parts.add(identifierText(attr));
-        }
-      }
-      String name = parts.removeLast();
-      relations.add(
-          new RelationReference(
-              parts.isEmpty() ? null : String.join(".", parts),
-              name,
-              null,
-              RelationReference.Kind.PHYSICAL));
+      addAnyNameRelation(anyName);
     }
+  }
+
+  private void addCommentTargets(CommentstmtContext comment) {
+    if (comment.any_name() == null) {
+      return;
+    }
+    if (comment.COLUMN() != null) {
+      addColumnTarget(comment.any_name());
+    } else if (isRelationTarget(comment.object_type_any_name())
+        || comment.object_type_name_on_any_name() != null
+        || (comment.CONSTRAINT() != null && comment.DOMAIN_P() == null)) {
+      addAnyNameRelation(comment.any_name());
+    }
+  }
+
+  private void addSecurityLabelTargets(SeclabelstmtContext label) {
+    if (label.any_name() == null) {
+      return;
+    }
+    if (label.COLUMN() != null) {
+      addColumnTarget(label.any_name());
+    } else if (isRelationTarget(label.object_type_any_name())) {
+      addAnyNameRelation(label.any_name());
+    }
+  }
+
+  private static boolean isRelationTarget(Object_type_any_nameContext objectType) {
+    return objectType != null
+        && RELATION_OBJECT_TYPES.contains(asciiLowercase(objectType.getText()));
+  }
+
+  private void addColumnTarget(Any_nameContext anyName) {
+    List<String> parts = anyNameParts(anyName);
+    String column = parts.removeLast();
+    if (parts.isEmpty()) {
+      columns.add(new ColumnReference(null, column));
+      return;
+    }
+    columns.add(new ColumnReference(String.join(".", parts), column));
+    addPhysicalRelation(parts);
+  }
+
+  private void addAnyNameRelation(Any_nameContext anyName) {
+    addPhysicalRelation(anyNameParts(anyName));
+  }
+
+  private void addPhysicalRelation(List<String> parts) {
+    String name = parts.removeLast();
+    relations.add(
+        new RelationReference(
+            parts.isEmpty() ? null : String.join(".", parts),
+            name,
+            null,
+            RelationReference.Kind.PHYSICAL));
+  }
+
+  private static List<String> anyNameParts(Any_nameContext anyName) {
+    List<String> parts = new ArrayList<>();
+    parts.add(identifierText(anyName.colid()));
+    if (anyName.attrs() != null) {
+      for (var attr : anyName.attrs().attr_name()) {
+        parts.add(identifierText(attr));
+      }
+    }
+    return parts;
   }
 
   private static boolean isCteSource(Qualified_nameContext relation) {

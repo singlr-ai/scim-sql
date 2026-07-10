@@ -36,15 +36,29 @@ Every deviation from upstream is listed here and marked with a
    `:user_id`) are first-class expression values.
 2. `PostgreSQLParser.g4` — removed `PLSQLVARIABLENAME` from the `identifier`
    rule so `:name` can never be an identifier, alias, or relation name.
-3. `*.java` support files — added a
+3. `PostgreSQLParser.g4` — split `createfunctionstmt` into a header plus
+   either the upstream AS-string option list or the PostgreSQL 14+ unquoted
+   SQL body (`RETURN expr` / `BEGIN ATOMIC stmt; ... END`), which upstream
+   does not parse.
+4. `PostgreSQLLexerBase.java` — `nextToken()` splits a greedy
+   `PLSQLVARIABLENAME` match into `COLON` plus the re-lexed name whenever the
+   previous default-channel token can end an expression, so JSON `key:value`
+   separators and array-slice bounds (`arr[lo:hi]`) written without
+   whitespace stay operators instead of becoming named parameters.
+5. `PostgreSQLLexerBase.java` — nested block comments are lexed iteratively
+   with a depth counter instead of the upstream recursive rule, which was
+   quadratic-time and could overflow the stack on adversarial nesting.
+6. `*.java` support files — added a
    `package ai.singlr.postgresql.parser;` declaration (upstream files have no
-   package). No other changes; the files are excluded from code formatting to
-   keep them diffable against upstream.
+   package). The files are excluded from code formatting to keep them
+   diffable against upstream.
 
-Known consequences, inherited from upstream lexing of `:name`:
+Known consequences of the `:name` named-parameter extension:
 
-- Array slices with identifier bounds (`arr[lo:hi]`) do not parse because
-  `:hi` lexes as a named parameter. Numeric bounds (`arr[1:2]`) are unaffected.
+- A colon directly after `[` binds to the parameter extension, so
+  `arr[:name]` is a subscript by named parameter, not a slice with an
+  omitted lower bound. Slices with an expression lower bound (`arr[lo:hi]`,
+  `arr[1:2]`) are unaffected.
 - The `:"identifier"` PL/SQL form is rejected.
 
 ### Expected grammar warnings

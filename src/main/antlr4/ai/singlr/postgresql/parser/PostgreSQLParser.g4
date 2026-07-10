@@ -1908,10 +1908,30 @@ nulls_order_
 
     ;
 
+// scim-sql local modification: split out createfunction_header and added the PostgreSQL 14+
+// unquoted SQL body forms (RETURN expr / BEGIN ATOMIC stmt; ... END), which upstream only
+// accepts as AS-string bodies.
 createfunctionstmt
+    : createfunction_header createfunc_opt_list
+    | createfunction_header createfunc_opt_item_no_as* createfunction_sql_body createfunc_opt_item_no_as*
+    ;
+
+createfunction_header
     : CREATE or_replace_? (FUNCTION | PROCEDURE) func_name func_args_with_defaults (
         RETURNS (func_return | TABLE OPEN_PAREN table_func_column_list CLOSE_PAREN)
-    )? createfunc_opt_list
+    )?
+    ;
+
+createfunc_opt_item_no_as
+    : LANGUAGE nonreservedword_or_sconst
+    | TRANSFORM transform_type_list
+    | WINDOW
+    | common_func_opt_item
+    ;
+
+createfunction_sql_body
+    : RETURN a_expr
+    | BEGIN_P ATOMIC (stmt SEMI)* END_P
     ;
 
 or_replace_

@@ -36,6 +36,10 @@ class StatementClassificationTest {
           CREATE MATERIALIZED VIEW mv AS SELECT 1               | DDL
           CREATE ROLE reporting                                 | DDL
           CREATE FUNCTION f() RETURNS int AS 'select 1' LANGUAGE sql | DDL
+          CREATE FUNCTION f(i int) RETURNS int LANGUAGE SQL RETURN i + 1 | DDL
+          CREATE FUNCTION f(i int) RETURNS int RETURN i + 1     | DDL
+          CREATE PROCEDURE p() LANGUAGE SQL BEGIN ATOMIC INSERT INTO audit VALUES (1); END | DDL
+          REASSIGN OWNED BY old_role TO new_role                | DDL
           ALTER TABLE t ADD COLUMN b int                        | DDL
           ALTER TABLE t RENAME TO t2                            | DDL
           DROP TABLE t                                          | DDL
@@ -79,6 +83,8 @@ class StatementClassificationTest {
           EXPLAIN SELECT * FROM users        | users
           CREATE VIEW v AS SELECT * FROM users | users
           CREATE TABLE copy_t AS SELECT * FROM users | users
+          CREATE FUNCTION f() RETURNS int LANGUAGE SQL RETURN (SELECT count(*) FROM users) | users
+          CREATE PROCEDURE p() LANGUAGE SQL BEGIN ATOMIC DELETE FROM users; END | users
           """)
   void shouldCaptureRelationsInWrappedStatements(String sql, String relation) {
     var names =

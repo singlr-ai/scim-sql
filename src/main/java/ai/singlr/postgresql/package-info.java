@@ -19,6 +19,9 @@
  *
  * <p>The grammar is the ANTLR grammars-v4 PostgreSQL grammar, vendored at a pinned upstream commit
  * with one deliberate extension: named parameters such as {@code :start_at} are first-class
- * expression values. See the repository NOTICE.md for provenance and the exact local modifications.
+ * expression values. A colon that directly continues an expression — a JSON {@code key:value}
+ * separator or an array-slice bound such as {@code arr[lo:hi]} — stays an operator; the single
+ * ambiguous form {@code arr[:name]} binds to the parameter extension. See the repository NOTICE.md
+ * for provenance and the exact local modifications.
  */
 package ai.singlr.postgresql;

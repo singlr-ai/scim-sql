@@ -24,16 +24,73 @@ package ai.singlr.postgresql.parser;
 
 import org.antlr.v4.runtime.CharStream;
 import org.antlr.v4.runtime.Lexer;
+import org.antlr.v4.runtime.Token;
 
+import java.util.Set;
 import java.util.Stack;
 
 public abstract class PostgreSQLLexerBase extends Lexer {
     protected final Stack<String> tags = new Stack<>();
     protected int commentDepth;
 
+    // scim-sql local modification: a named parameter (:name) is only valid where an expression
+    // starts. When ':name' directly follows a token that can end an expression, the colon is
+    // PostgreSQL's colon operator (a JSON key:value separator or an array-slice bound), so the
+    // greedy PLSQLVARIABLENAME match is split into COLON and the re-lexed name.
+    private static final Set<Integer> EXPRESSION_END_TOKEN_TYPES = Set.of(
+            PostgreSQLLexer.Identifier,
+            PostgreSQLLexer.QuotedIdentifier,
+            PostgreSQLLexer.StringConstant,
+            PostgreSQLLexer.UnicodeEscapeStringConstant,
+            PostgreSQLLexer.EscapeStringConstant,
+            PostgreSQLLexer.BinaryStringConstant,
+            PostgreSQLLexer.HexadecimalStringConstant,
+            PostgreSQLLexer.EndDollarStringConstant,
+            PostgreSQLLexer.Integral,
+            PostgreSQLLexer.Numeric,
+            PostgreSQLLexer.PARAM,
+            PostgreSQLLexer.PLSQLVARIABLENAME,
+            PostgreSQLLexer.CLOSE_PAREN,
+            PostgreSQLLexer.CLOSE_BRACKET,
+            PostgreSQLLexer.NULL_P,
+            PostgreSQLLexer.TRUE_P,
+            PostgreSQLLexer.FALSE_P,
+            PostgreSQLLexer.END_P,
+            PostgreSQLLexer.CURRENT_DATE,
+            PostgreSQLLexer.CURRENT_TIME,
+            PostgreSQLLexer.CURRENT_TIMESTAMP,
+            PostgreSQLLexer.LOCALTIME,
+            PostgreSQLLexer.LOCALTIMESTAMP,
+            PostgreSQLLexer.CURRENT_ROLE,
+            PostgreSQLLexer.CURRENT_USER,
+            PostgreSQLLexer.SESSION_USER,
+            PostgreSQLLexer.USER,
+            PostgreSQLLexer.CURRENT_CATALOG,
+            PostgreSQLLexer.CURRENT_SCHEMA);
+
+    private int lastDefaultChannelTokenType = Token.INVALID_TYPE;
+
     protected PostgreSQLLexerBase(CharStream input) {
         super(input);
 
+    }
+
+    @Override
+    public Token nextToken() {
+        Token token = super.nextToken();
+        if (token.getType() == PostgreSQLLexer.PLSQLVARIABLENAME
+                && EXPRESSION_END_TOKEN_TYPES.contains(lastDefaultChannelTokenType)) {
+            getInputStream().seek(token.getStartIndex() + 1);
+            setLine(token.getLine());
+            setCharPositionInLine(token.getCharPositionInLine() + 1);
+            token = getTokenFactory().create(_tokenFactorySourcePair, PostgreSQLLexer.COLON, null,
+                    Token.DEFAULT_CHANNEL, token.getStartIndex(), token.getStartIndex(),
+                    token.getLine(), token.getCharPositionInLine());
+        }
+        if (token.getChannel() == Token.DEFAULT_CHANNEL) {
+            lastDefaultChannelTokenType = token.getType();
+        }
+        return token;
     }
 
     public void PushTag() {

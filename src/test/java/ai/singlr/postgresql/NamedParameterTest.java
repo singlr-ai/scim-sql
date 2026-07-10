@@ -59,6 +59,49 @@ class NamedParameterTest {
   }
 
   @Test
+  @DisplayName("json key colon adjacency is an operator, not a parameter")
+  void shouldNotConfuseJsonColon() {
+    var spaced = PostgresQueryAnalyzer.analyze("SELECT JSON_OBJECT('a' : owner) FROM t");
+    var compact = PostgresQueryAnalyzer.analyze("SELECT JSON_OBJECT('a':owner) FROM t");
+
+    assertEquals(Set.of(), compact.parameters());
+    assertEquals(spaced.normalizedSql(), compact.normalizedSql());
+    assertEquals(
+        Set.of(), PostgresQueryAnalyzer.analyze("SELECT JSON_OBJECT(k:v) FROM t").parameters());
+  }
+
+  @Test
+  @DisplayName("json keys and values may still be parameters")
+  void shouldCaptureJsonValueParameters() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "SELECT JSON_OBJECT('k':owner) FROM t WHERE id = :id AND x = JSON_OBJECT('v' : :v)");
+
+    assertEquals(Set.of("id", "v"), analysis.parameters());
+    assertEquals(
+        Set.of("key", "val"),
+        PostgresQueryAnalyzer.analyze("SELECT JSON_OBJECT(:key : :val)").parameters());
+  }
+
+  @Test
+  @DisplayName("array slices with identifier bounds parse and produce no parameters")
+  void shouldNotConfuseSliceBounds() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "SELECT arr[lo:hi], arr[1:n], arr[f(x):g(y)] FROM t" + " WHERE x = :p");
+
+    assertEquals(Set.of("p"), analysis.parameters());
+  }
+
+  @Test
+  @DisplayName("colon directly after an opening bracket stays a parameter")
+  void shouldKeepParameterAfterOpeningBracket() {
+    var analysis = PostgresQueryAnalyzer.analyze("SELECT arr[:idx] FROM t");
+
+    assertEquals(Set.of("idx"), analysis.parameters());
+  }
+
+  @Test
   @DisplayName("colon-like content in strings, comments and quoted identifiers is inert")
   void shouldIgnoreColonContent() {
     var analysis =
