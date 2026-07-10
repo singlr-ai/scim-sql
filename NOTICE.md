@@ -40,15 +40,33 @@ Every deviation from upstream is listed here and marked with a
    either the upstream AS-string option list or the PostgreSQL 14+ unquoted
    SQL body (`RETURN expr` / `BEGIN ATOMIC stmt; ... END`), which upstream
    does not parse.
-4. `PostgreSQLLexerBase.java` — `nextToken()` splits a greedy
+4. `PostgreSQLParser.g4` — closed modern-PostgreSQL gaps against `gram.y`
+   (PostgreSQL 14 through 18), each also marked in place:
+   `json_aggregate_func` was defined upstream but never referenced (wired
+   into `func_expr` / `func_expr_windowless`, and its `json_returning_clause`
+   made optional as in `gram.y`); MERGE gained the PostgreSQL 17 `RETURNING`
+   clause and `WHEN NOT MATCHED BY SOURCE | BY TARGET`; `group_clause`
+   accepts the PostgreSQL 14 `ALL | DISTINCT` set quantifier;
+   `common_table_expr` gained the PostgreSQL 14 `SEARCH` and `CYCLE`
+   clauses; the PostgreSQL 16 `IS [NOT] JSON` predicate was added to
+   `a_expr_is_not`; the PostgreSQL 17 `JSON_TABLE` table function was added
+   and wired into `table_ref`; `UNIQUE`/`PRIMARY KEY` constraints accept the
+   PostgreSQL 18 `WITHOUT OVERLAPS` marker; `xmltable_column_option_el`
+   accepts `PATH` explicitly (the lexer keyword cannot match the generic
+   identifier option); `json_format_clause` uses the real `FORMAT` token —
+   upstream's `FORMAT_LA` literal is Bison lookahead-token residue that
+   never occurs in SQL text, so `FORMAT JSON` could never parse.
+5. `PostgreSQLLexer.g4` — fixed the upstream `BREADTH: 'BREATH'` typo that
+   made `SEARCH BREADTH FIRST` unparseable.
+6. `PostgreSQLLexerBase.java` — `nextToken()` splits a greedy
    `PLSQLVARIABLENAME` match into `COLON` plus the re-lexed name whenever the
    previous default-channel token can end an expression, so JSON `key:value`
    separators and array-slice bounds (`arr[lo:hi]`) written without
    whitespace stay operators instead of becoming named parameters.
-5. `PostgreSQLLexerBase.java` — nested block comments are lexed iteratively
+7. `PostgreSQLLexerBase.java` — nested block comments are lexed iteratively
    with a depth counter instead of the upstream recursive rule, which was
    quadratic-time and could overflow the stack on adversarial nesting.
-6. `*.java` support files — added a
+8. `*.java` support files — added a
    `package ai.singlr.postgresql.parser;` declaration (upstream files have no
    package). The files are excluded from code formatting to keep them
    diffable against upstream.

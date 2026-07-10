@@ -559,6 +559,85 @@ class PostgresQueryAnalyzerTest {
   }
 
   @Test
+  @DisplayName("json aggregates are reported as functions and accept filter and over clauses")
+  void shouldReportJsonAggregates() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "SELECT JSON_OBJECTAGG(k : v) FILTER (WHERE v IS NOT NULL) OVER (PARTITION BY g),"
+                + " JSON_ARRAYAGG(v ORDER BY v) FROM t");
+
+    var names = analysis.functions().stream().map(FunctionReference::name).toList();
+    assertTrue(names.contains("json_objectagg"), names.toString());
+    assertTrue(names.contains("json_arrayagg"), names.toString());
+    assertTrue(analysis.features().contains(QueryFeature.WINDOW));
+  }
+
+  @Test
+  @DisplayName("search and cycle clauses parse and keep cte resolution intact")
+  void shouldAnalyzeSearchAndCycleClauses() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "WITH RECURSIVE tr AS (SELECT id, pid FROM edges UNION ALL"
+                + " SELECT e.id, e.pid FROM edges e JOIN tr ON e.pid = tr.id)"
+                + " SEARCH DEPTH FIRST BY id SET ord"
+                + " CYCLE id SET looped USING path"
+                + " SELECT * FROM tr WHERE weight > :w");
+
+    assertTrue(analysis.features().contains(QueryFeature.RECURSIVE_CTE));
+    assertEquals(Set.of("w"), analysis.parameters());
+    var kinds =
+        analysis.relations().stream()
+            .map(relation -> relation.name() + ":" + relation.kind())
+            .toList();
+    assertTrue(kinds.contains("edges:PHYSICAL"), kinds.toString());
+    assertTrue(kinds.contains("tr:CTE"), kinds.toString());
+  }
+
+  @Test
+  @DisplayName("merge returning and by source/target variants report their references")
+  void shouldAnalyzeModernMerge() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "MERGE INTO t USING s ON t.id = s.id"
+                + " WHEN NOT MATCHED BY SOURCE THEN UPDATE SET a = :a"
+                + " WHEN NOT MATCHED BY TARGET THEN INSERT VALUES (1)"
+                + " RETURNING t.id, s.id");
+
+    assertEquals(StatementKind.MERGE, analysis.statementKind());
+    assertEquals(Set.of("a"), analysis.parameters());
+    assertTrue(analysis.columns().contains(new ColumnReference("t", "id")));
+    assertTrue(analysis.columns().contains(new ColumnReference("s", "id")));
+  }
+
+  @Test
+  @DisplayName("xmltable and json_table are function relations with aliases")
+  void shouldReportTableFunctionRelations() {
+    var xml =
+        PostgresQueryAnalyzer.analyze(
+            "SELECT * FROM XMLTABLE('/r' PASSING x COLUMNS c1 int PATH 'c1') AS xt");
+    assertTrue(
+        xml.relations()
+            .contains(
+                new RelationReference(null, "xmltable", "xt", RelationReference.Kind.FUNCTION)),
+        xml.relations().toString());
+    assertTrue(xml.features().contains(QueryFeature.FUNCTION_RELATION));
+
+    var json =
+        PostgresQueryAnalyzer.analyze(
+            "SELECT jt.* FROM JSON_TABLE(j, '$[*]' AS root COLUMNS (seq FOR ORDINALITY,"
+                + " id int PATH '$.id', has_kids boolean EXISTS PATH '$.kids',"
+                + " NESTED PATH '$.kids[*]' COLUMNS (kid text PATH '$.name'))) AS jt"
+                + " WHERE jt.id = :id");
+    assertTrue(
+        json.relations()
+            .contains(
+                new RelationReference(null, "json_table", "jt", RelationReference.Kind.FUNCTION)),
+        json.relations().toString());
+    assertTrue(json.features().contains(QueryFeature.FUNCTION_RELATION));
+    assertEquals(Set.of("id"), json.parameters());
+  }
+
+  @Test
   @DisplayName("statements nested in a function body do not add to the statement count")
   void shouldNotCountFunctionBodyStatements() {
     var analysis =

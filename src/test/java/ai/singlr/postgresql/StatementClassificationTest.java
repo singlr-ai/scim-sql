@@ -29,6 +29,20 @@ class StatementClassificationTest {
           MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN DO NOTHING | MERGE
           MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN DO NOTHING | MERGE
           MERGE INTO t USING s ON t.id = s.id WHEN MATCHED AND t.a > 1 THEN UPDATE SET a = 2 WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT DEFAULT VALUES | MERGE
+          MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET a = 1 RETURNING t.id | MERGE
+          MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED BY SOURCE THEN DELETE WHEN NOT MATCHED BY TARGET THEN INSERT VALUES (1) | MERGE
+          SELECT JSON_OBJECTAGG(k : v) FROM t                   | SELECT
+          SELECT JSON_ARRAYAGG(v ORDER BY v RETURNING jsonb) FROM t | SELECT
+          SELECT a, b FROM t GROUP BY DISTINCT ROLLUP (a), ROLLUP (b) | SELECT
+          SELECT x IS JSON OBJECT, y IS NOT JSON ARRAY, z IS JSON WITH UNIQUE KEYS FROM t | SELECT
+          WITH RECURSIVE tr AS (SELECT id FROM t2 UNION ALL SELECT t3.id FROM t3 JOIN tr ON t3.pid = tr.id) SEARCH BREADTH FIRST BY id SET ord SELECT * FROM tr | SELECT
+          WITH RECURSIVE tr AS (SELECT id FROM t2 UNION ALL SELECT t3.id FROM t3 JOIN tr ON t3.pid = tr.id) CYCLE id SET looped TO true DEFAULT false USING path SELECT * FROM tr | SELECT
+          SELECT JSON_OBJECT('a' : x FORMAT JSON RETURNING jsonb FORMAT JSON) FROM t | SELECT
+          SELECT breadth, breath, depth, path FROM t            | SELECT
+          SELECT a, b FROM t GROUP BY ALL a, b                  | SELECT
+          MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED BY SOURCE THEN DO NOTHING WHEN NOT MATCHED THEN DO NOTHING | MERGE
+          CREATE TABLE tt (r int4range, PRIMARY KEY (r WITHOUT OVERLAPS)) | DDL
+          CREATE TABLE tt (id int, r int4range, UNIQUE (id, r WITHOUT OVERLAPS)) | DDL
           WITH src AS (SELECT 1 AS id) MERGE INTO t USING src ON t.id = src.id WHEN MATCHED THEN DO NOTHING | MERGE
           CREATE TABLE t (id int)                               | DDL
           CREATE INDEX idx ON t (id)                            | DDL

@@ -26,6 +26,8 @@ import ai.singlr.postgresql.parser.PostgreSQLParser.Insert_targetContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.InsertstmtContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Into_clauseContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Join_qualContext;
+import ai.singlr.postgresql.parser.PostgreSQLParser.Json_aggregate_funcContext;
+import ai.singlr.postgresql.parser.PostgreSQLParser.Json_tableContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Locked_rels_listContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.MergestmtContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Object_type_any_nameContext;
@@ -52,6 +54,7 @@ import ai.singlr.postgresql.parser.PostgreSQLParser.UpdatestmtContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Values_clauseContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Window_clauseContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.With_clauseContext;
+import ai.singlr.postgresql.parser.PostgreSQLParser.XmltableContext;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashSet;
@@ -217,7 +220,16 @@ final class AnalysisCollector {
                   special.getStart().getLine(),
                   special.getStart().getCharPositionInLine()));
       case PlsqlvariablenameContext parameter -> parameters.add(parameter.getText().substring(1));
+      case Json_aggregate_funcContext aggregate ->
+          functions.add(
+              new FunctionReference(
+                  null,
+                  asciiLowercase(aggregate.getStart().getText()),
+                  aggregate.getStart().getLine(),
+                  aggregate.getStart().getCharPositionInLine()));
       case Func_tableContext functionRelation -> addFunctionRelation(functionRelation);
+      case XmltableContext xmlTable -> addTableFunctionRelation(xmlTable);
+      case Json_tableContext jsonTable -> addTableFunctionRelation(jsonTable);
       case Target_starContext star -> {
         features.add(QueryFeature.STAR_PROJECTION);
         columns.add(new ColumnReference(null, "*"));
@@ -438,6 +450,20 @@ final class AnalysisCollector {
                 RelationReference.Kind.FUNCTION));
       }
     }
+  }
+
+  private void addTableFunctionRelation(ParserRuleContext tableFunction) {
+    features.add(QueryFeature.FUNCTION_RELATION);
+    String alias =
+        tableFunction.getParent() instanceof Table_refContext tableRef
+            ? followingAlias(tableRef, tableFunction)
+            : null;
+    relations.add(
+        new RelationReference(
+            null,
+            asciiLowercase(tableFunction.getStart().getText()),
+            alias,
+            RelationReference.Kind.FUNCTION));
   }
 
   private static List<Func_expr_windowlessContext> windowlessFunctions(

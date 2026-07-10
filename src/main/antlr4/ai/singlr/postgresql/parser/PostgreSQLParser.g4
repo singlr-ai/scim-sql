@@ -768,12 +768,14 @@ tableconstraint
 
 constraintelem
     : CHECK OPEN_PAREN a_expr CLOSE_PAREN constraintattributespec
+    // scim-sql local modification: added the PostgreSQL 18 WITHOUT OVERLAPS temporal
+    // constraint marker from gram.y.
     | UNIQUE (
-        OPEN_PAREN columnlist CLOSE_PAREN c_include_? definition_? optconstablespace? constraintattributespec
+        OPEN_PAREN columnlist (WITHOUT OVERLAPS)? CLOSE_PAREN c_include_? definition_? optconstablespace? constraintattributespec
         | existingindex constraintattributespec
     )
     | PRIMARY KEY (
-        OPEN_PAREN columnlist CLOSE_PAREN c_include_? definition_? optconstablespace? constraintattributespec
+        OPEN_PAREN columnlist (WITHOUT OVERLAPS)? CLOSE_PAREN c_include_? definition_? optconstablespace? constraintattributespec
         | existingindex constraintattributespec
     )
     | EXCLUDE access_method_clause? OPEN_PAREN exclusionconstraintlist CLOSE_PAREN c_include_? definition_? optconstablespace? exclusionwhereclause?
@@ -2861,19 +2863,21 @@ returning_clause
     ;
 
 // https://www.postgresql.org/docs/current/sql-merge.html
+// scim-sql local modification: added the PostgreSQL 17 RETURNING clause and the
+// WHEN NOT MATCHED BY SOURCE / BY TARGET variants from gram.y.
 mergestmt
     : with_clause_? MERGE INTO? qualified_name alias_clause?
       USING (select_with_parens | qualified_name) alias_clause?
-      ON a_expr merge_when_clause+
+      ON a_expr merge_when_clause+ returning_clause?
     ;
 
 merge_when_clause
-    : WHEN MATCHED (AND a_expr)? THEN? (
+    : WHEN (MATCHED | NOT MATCHED BY SOURCE) (AND a_expr)? THEN? (
         UPDATE SET set_clause_list
         | DELETE_P
         | DO NOTHING
     )
-    | WHEN NOT MATCHED (AND a_expr)? THEN? (
+    | WHEN NOT MATCHED (BY TARGET)? (AND a_expr)? THEN? (
         INSERT (OPEN_PAREN insert_column_list CLOSE_PAREN)? (values_clause | DEFAULT VALUES)
         | DO NOTHING
     )
@@ -3016,8 +3020,17 @@ cte_list
     : common_table_expr (COMMA common_table_expr)*
     ;
 
+// scim-sql local modification: added the PostgreSQL 14 SEARCH and CYCLE clauses from gram.y.
 common_table_expr
-    : name name_list_? AS materialized_? OPEN_PAREN preparablestmt CLOSE_PAREN
+    : name name_list_? AS materialized_? OPEN_PAREN preparablestmt CLOSE_PAREN search_clause? cycle_clause?
+    ;
+
+search_clause
+    : SEARCH (DEPTH | BREADTH) FIRST_P BY columnlist SET colid
+    ;
+
+cycle_clause
+    : CYCLE columnlist SET colid (TO aexprconst DEFAULT aexprconst)? USING colid
     ;
 
 materialized_
@@ -3136,8 +3149,9 @@ first_or_next
     | NEXT
     ;
 
+// scim-sql local modification: added the PostgreSQL 14 set quantifier (GROUP BY ALL | DISTINCT).
 group_clause
-    : GROUP_P BY group_by_list
+    : GROUP_P BY (ALL | DISTINCT)? group_by_list
 
     ;
 
@@ -3214,14 +3228,17 @@ from_list
     : table_ref (COMMA table_ref)*
     ;
 
+// scim-sql local modification: added json_table (PostgreSQL 17) as a table reference.
 table_ref
     : (
         relation_expr alias_clause? tablesample_clause?
         | func_table func_alias_clause?
         | xmltable alias_clause?
+        | json_table alias_clause?
         | select_with_parens alias_clause?
         | LATERAL_P (
             xmltable alias_clause?
+            | json_table alias_clause?
             | func_table func_alias_clause?
             | select_with_parens alias_clause?
         )
@@ -3326,6 +3343,35 @@ tablefuncelement
     : colid typename collate_clause_?
     ;
 
+// scim-sql local modification: added the PostgreSQL 17 JSON_TABLE table function from gram.y;
+// upstream has the JSON_TABLE token but no production.
+json_table
+    : JSON_TABLE OPEN_PAREN json_value_expr COMMA a_expr json_table_path_name_?
+      json_passing_clause? COLUMNS OPEN_PAREN json_table_column_definition_list CLOSE_PAREN
+      json_on_error_clause? CLOSE_PAREN
+    ;
+
+json_table_path_name_
+    : AS name
+    ;
+
+json_table_column_definition_list
+    : json_table_column_definition (COMMA json_table_column_definition)*
+    ;
+
+json_table_column_definition
+    : colid FOR ORDINALITY
+    | colid typename EXISTS json_table_column_path_clause_? json_on_error_clause?
+    | colid typename json_format_clause? json_table_column_path_clause_?
+      json_wrapper_behavior json_quotes_clause? json_behavior_clause?
+    | NESTED PATH? sconst json_table_path_name_? COLUMNS
+      OPEN_PAREN json_table_column_definition_list CLOSE_PAREN
+    ;
+
+json_table_column_path_clause_
+    : PATH sconst
+    ;
+
 xmltable
     : XMLTABLE OPEN_PAREN (
         c_expr xmlexists_argument COLUMNS xmltable_column_list
@@ -3345,8 +3391,11 @@ xmltable_column_option_list
     : xmltable_column_option_el+
     ;
 
+// scim-sql local modification: PATH is a lexer keyword here (PostgreSQL treats it as a plain
+// identifier), so the generic identifier option cannot match it; accept it explicitly.
 xmltable_column_option_el
     : DEFAULT a_expr
+    | PATH a_expr
     | identifier a_expr
     | NOT NULL_P
     | NULL_P
@@ -3621,6 +3670,7 @@ a_expr_isnull
 
 /*12*/
 
+// scim-sql local modification: added the PostgreSQL 16 IS [NOT] JSON predicate from gram.y.
 a_expr_is_not
     : a_expr_compare (
         IS NOT? (
@@ -3632,6 +3682,7 @@ a_expr_is_not
             | OF OPEN_PAREN type_list CLOSE_PAREN
             | DOCUMENT_P
             | unicode_normal_form? NORMALIZED
+            | JSON (VALUE_P | ARRAY | OBJECT_P | SCALAR)? json_key_uniqueness_constraint?
         )
     )?
     ;
@@ -3760,13 +3811,17 @@ func_application
     ) CLOSE_PAREN
     ;
 
+// scim-sql local modification: json_aggregate_func was defined upstream but never referenced;
+// wired into func_expr and func_expr_windowless exactly as in PostgreSQL gram.y.
 func_expr
     : func_application within_group_clause? filter_clause? over_clause?
+    | json_aggregate_func filter_clause? over_clause?
     | func_expr_common_subexpr
     ;
 
 func_expr_windowless
     : func_application
+    | json_aggregate_func
     | func_expr_common_subexpr
     ;
 
@@ -4200,9 +4255,10 @@ json_value_expr:
 			a_expr json_format_clause?
 		;
 
+// scim-sql local modification: FORMAT_LA is Bison lookahead-token residue whose literal
+// ('FORMAT_LA') never occurs in SQL text; real input reads FORMAT JSON [ENCODING name].
 json_format_clause:
-			FORMAT_LA JSON ENCODING name
-			| FORMAT_LA JSON
+			FORMAT JSON (ENCODING name)?
 		;
 
 
@@ -4274,18 +4330,20 @@ json_value_expr_list:
 			| json_value_expr_list ',' json_value_expr
 		;
 
+// scim-sql local modification: json_returning_clause is optional as in PostgreSQL gram.y
+// (json_returning_clause_opt); upstream required it.
 json_aggregate_func:
 			JSON_OBJECTAGG '('
 				json_name_and_value
 				json_object_constructor_null_clause?
 				json_key_uniqueness_constraint?
-				json_returning_clause
+				json_returning_clause?
 			')'
 			| JSON_ARRAYAGG '('
 				json_value_expr
 				json_array_aggregate_order_by_clause?
 				json_array_constructor_null_clause?
-				json_returning_clause
+				json_returning_clause?
 			')'
 		;
 
