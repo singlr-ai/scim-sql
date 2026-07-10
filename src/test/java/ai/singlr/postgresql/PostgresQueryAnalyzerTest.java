@@ -1,0 +1,356 @@
+/*
+ * Copyright (c) 2026 Singular
+ * SPDX-License-Identifier: MIT
+ */
+
+package ai.singlr.postgresql;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.List;
+import java.util.Set;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+@DisplayName("PostgresQueryAnalyzer core analysis")
+class PostgresQueryAnalyzerTest {
+
+  @Test
+  @DisplayName("minimal select produces exact analysis")
+  void shouldAnalyzeMinimalSelect() {
+    var analysis = PostgresQueryAnalyzer.analyze("SELECT 1");
+
+    assertEquals(StatementKind.SELECT, analysis.statementKind());
+    assertEquals(1, analysis.statementCount());
+    assertEquals(List.of(), analysis.relations());
+    assertEquals(List.of(), analysis.columns());
+    assertEquals(List.of(), analysis.functions());
+    assertEquals(Set.of(), analysis.parameters());
+    assertEquals(Set.of(), analysis.features());
+    assertEquals("select 1", analysis.normalizedSql());
+  }
+
+  @Test
+  @DisplayName("simple select reports relation and columns")
+  void shouldAnalyzeSimpleSelect() {
+    var analysis = PostgresQueryAnalyzer.analyze("SELECT id, name FROM users WHERE active = true");
+
+    assertEquals(StatementKind.SELECT, analysis.statementKind());
+    assertEquals(
+        List.of(new RelationReference(null, "users", null, RelationReference.Kind.PHYSICAL)),
+        analysis.relations());
+    assertEquals(
+        List.of(
+            new ColumnReference(null, "id"),
+            new ColumnReference(null, "name"),
+            new ColumnReference(null, "active")),
+        analysis.columns());
+  }
+
+  @Test
+  @DisplayName("join preserves aliases and qualifiers")
+  void shouldAnalyzeJoin() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "SELECT u.id, o.total FROM users u JOIN orders o ON o.user_id = u.id");
+
+    assertEquals(
+        List.of(
+            new RelationReference(null, "users", "u", RelationReference.Kind.PHYSICAL),
+            new RelationReference(null, "orders", "o", RelationReference.Kind.PHYSICAL)),
+        analysis.relations());
+    assertEquals(
+        List.of(
+            new ColumnReference("u", "id"),
+            new ColumnReference("o", "total"),
+            new ColumnReference("o", "user_id"),
+            new ColumnReference("u", "id")),
+        analysis.columns());
+  }
+
+  @Test
+  @DisplayName("aggregate query captures functions in select, group by and having")
+  void shouldAnalyzeAggregate() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "SELECT count(id), lower(name) FROM users GROUP BY lower(name)"
+                + " HAVING max(age) > 21");
+
+    var names = analysis.functions().stream().map(FunctionReference::name).toList();
+    assertEquals(List.of("count", "lower", "lower", "max"), names);
+    assertEquals(Set.of(), analysis.features());
+  }
+
+  @Test
+  @DisplayName("window function flags WINDOW and captures function")
+  void shouldAnalyzeWindow() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "SELECT rank() OVER (PARTITION BY dept ORDER BY salary) FROM emp");
+
+    assertTrue(analysis.features().contains(QueryFeature.WINDOW));
+    assertEquals("rank", analysis.functions().getFirst().name());
+  }
+
+  @Test
+  @DisplayName("named window clause flags WINDOW")
+  void shouldAnalyzeNamedWindow() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze("SELECT sum(x) OVER w FROM t WINDOW w AS (PARTITION BY y)");
+
+    assertTrue(analysis.features().contains(QueryFeature.WINDOW));
+  }
+
+  @Test
+  @DisplayName("set operations flag SET_OPERATION")
+  void shouldAnalyzeSetOperations() {
+    for (var op : List.of("UNION", "UNION ALL", "INTERSECT", "EXCEPT")) {
+      var analysis = PostgresQueryAnalyzer.analyze("SELECT a FROM t1 " + op + " SELECT a FROM t2");
+      assertTrue(
+          analysis.features().contains(QueryFeature.SET_OPERATION), op + " should be flagged");
+      assertEquals(2, analysis.relations().size(), op);
+    }
+  }
+
+  @Test
+  @DisplayName("quoted and schema-qualified identifiers are preserved")
+  void shouldPreserveQuotedIdentifiers() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "SELECT \"Weird Name\", MixedCase FROM \"MySchema\".\"MyTable\" mt,"
+                + " analytics.events");
+
+    assertEquals(
+        List.of(
+            new RelationReference("MySchema", "MyTable", "mt", RelationReference.Kind.PHYSICAL),
+            new RelationReference("analytics", "events", null, RelationReference.Kind.PHYSICAL)),
+        analysis.relations());
+    assertEquals("MySchema", analysis.relations().getFirst().schema());
+    assertEquals(
+        List.of(new ColumnReference(null, "Weird Name"), new ColumnReference(null, "mixedcase")),
+        analysis.columns());
+    assertEquals("analytics", analysis.relations().get(1).schema());
+  }
+
+  @Test
+  @DisplayName("nested correlated subquery keeps physical relations at all depths")
+  void shouldAnalyzeCorrelatedSubquery() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "SELECT u.id FROM users u WHERE EXISTS ("
+                + "SELECT 1 FROM orders o WHERE o.user_id = u.id AND o.total > ("
+                + "SELECT avg(total) FROM orders))");
+
+    assertTrue(analysis.features().contains(QueryFeature.SUBQUERY));
+    var names = analysis.relations().stream().map(RelationReference::name).toList();
+    assertEquals(List.of("users", "orders", "orders"), names);
+  }
+
+  @Test
+  @DisplayName("CTE references are distinguished from physical relations")
+  void shouldDistinguishCteFromPhysical() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "WITH active AS (SELECT * FROM users WHERE active) SELECT * FROM active, orders");
+
+    assertEquals(
+        List.of(
+            new RelationReference(null, "users", null, RelationReference.Kind.PHYSICAL),
+            new RelationReference(null, "active", null, RelationReference.Kind.CTE),
+            new RelationReference(null, "orders", null, RelationReference.Kind.PHYSICAL)),
+        analysis.relations());
+    assertTrue(analysis.features().contains(QueryFeature.CTE));
+  }
+
+  @Test
+  @DisplayName("non-recursive CTE body referencing its own name is physical")
+  void shouldTreatSelfReferenceInNonRecursiveCteAsPhysical() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze("WITH users AS (SELECT * FROM users) SELECT * FROM users");
+
+    assertEquals(
+        List.of(
+            new RelationReference(null, "users", null, RelationReference.Kind.PHYSICAL),
+            new RelationReference(null, "users", null, RelationReference.Kind.CTE)),
+        analysis.relations());
+  }
+
+  @Test
+  @DisplayName("recursive CTE self-reference is a CTE reference")
+  void shouldTreatSelfReferenceInRecursiveCteAsCte() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "WITH RECURSIVE tree AS ("
+                + "SELECT id, parent_id FROM nodes WHERE parent_id IS NULL"
+                + " UNION ALL SELECT n.id, n.parent_id FROM nodes n JOIN tree t"
+                + " ON n.parent_id = t.id) SELECT * FROM tree");
+
+    assertTrue(analysis.features().contains(QueryFeature.RECURSIVE_CTE));
+    var kinds = analysis.relations().stream().map(r -> r.name() + ":" + r.kind()).toList();
+    assertEquals(List.of("nodes:PHYSICAL", "nodes:PHYSICAL", "tree:CTE", "tree:CTE"), kinds);
+  }
+
+  @Test
+  @DisplayName("later CTE sees earlier sibling CTE")
+  void shouldScopeSiblingCtes() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "WITH a AS (SELECT 1 AS x), b AS (SELECT x FROM a) SELECT * FROM b");
+
+    assertEquals(
+        List.of(
+            new RelationReference(null, "a", null, RelationReference.Kind.CTE),
+            new RelationReference(null, "b", null, RelationReference.Kind.CTE)),
+        analysis.relations());
+  }
+
+  @Test
+  @DisplayName("inner CTE shadows outer physical relation without losing outer physical refs")
+  void shouldHandleShadowedCteNames() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "SELECT * FROM users WHERE id IN ("
+                + "WITH users AS (SELECT owner_id FROM projects)"
+                + " SELECT owner_id FROM users)");
+
+    var kinds = analysis.relations().stream().map(r -> r.name() + ":" + r.kind()).toList();
+    assertEquals(List.of("users:PHYSICAL", "projects:PHYSICAL", "users:CTE"), kinds);
+  }
+
+  @Test
+  @DisplayName("schema-qualified reference never matches a CTE name")
+  void shouldNotMatchSchemaQualifiedAsCte() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze("WITH users AS (SELECT 1) SELECT * FROM public.users, users");
+
+    assertEquals(
+        List.of(
+            new RelationReference("public", "users", null, RelationReference.Kind.PHYSICAL),
+            new RelationReference(null, "users", null, RelationReference.Kind.CTE)),
+        analysis.relations());
+  }
+
+  @Test
+  @DisplayName("functions are captured in select, where, join, group, window and from")
+  void shouldCaptureFunctionsEverywhere() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "SELECT lower(a), rank() OVER (ORDER BY nullif(b, 0))"
+                + " FROM t JOIN generate_series(1, 10) g ON abs(t.x) = g"
+                + " WHERE coalesce(t.y, now()) IS NOT NULL"
+                + " GROUP BY lower(a), date_trunc('day', t.created_at)");
+
+    var names = analysis.functions().stream().map(FunctionReference::name).toList();
+    assertTrue(
+        names.containsAll(
+            List.of(
+                "lower",
+                "rank",
+                "nullif",
+                "generate_series",
+                "abs",
+                "coalesce",
+                "now",
+                "date_trunc")),
+        names.toString());
+  }
+
+  @Test
+  @DisplayName("schema-qualified function keeps schema and location")
+  void shouldCaptureSchemaQualifiedFunction() {
+    var analysis = PostgresQueryAnalyzer.analyze("SELECT pg_catalog.now()");
+
+    var function = analysis.functions().getFirst();
+    assertEquals("pg_catalog", function.schema());
+    assertEquals("now", function.name());
+    assertEquals(1, function.line());
+    assertEquals(7, function.column());
+  }
+
+  @Test
+  @DisplayName("special-form functions are reported by keyword")
+  void shouldCaptureSpecialFormFunctions() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze("SELECT CAST(a AS int), EXTRACT(YEAR FROM b) FROM t");
+
+    var names = analysis.functions().stream().map(FunctionReference::name).toList();
+    assertEquals(List.of("cast", "extract"), names);
+  }
+
+  @Test
+  @DisplayName("insert reports target relation, columns and parameters")
+  void shouldAnalyzeInsert() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "INSERT INTO audit.events (kind, payload) VALUES (:kind, :payload)");
+
+    assertEquals(StatementKind.INSERT, analysis.statementKind());
+    assertEquals(
+        List.of(new RelationReference("audit", "events", null, RelationReference.Kind.PHYSICAL)),
+        analysis.relations());
+    assertEquals(
+        List.of(new ColumnReference(null, "kind"), new ColumnReference(null, "payload")),
+        analysis.columns());
+    assertEquals(Set.of("kind", "payload"), analysis.parameters());
+  }
+
+  @Test
+  @DisplayName("update reports set targets and alias")
+  void shouldAnalyzeUpdate() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze("UPDATE users u SET name = :name WHERE u.id = :id");
+
+    assertEquals(StatementKind.UPDATE, analysis.statementKind());
+    assertEquals(
+        List.of(new RelationReference(null, "users", "u", RelationReference.Kind.PHYSICAL)),
+        analysis.relations());
+    assertEquals(
+        List.of(new ColumnReference(null, "name"), new ColumnReference("u", "id")),
+        analysis.columns());
+  }
+
+  @Test
+  @DisplayName("delete using reports both relations")
+  void shouldAnalyzeDeleteUsing() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "DELETE FROM sessions s USING users u WHERE s.user_id = u.id AND u.banned");
+
+    assertEquals(StatementKind.DELETE, analysis.statementKind());
+    assertEquals(
+        List.of(
+            new RelationReference(null, "sessions", "s", RelationReference.Kind.PHYSICAL),
+            new RelationReference(null, "users", "u", RelationReference.Kind.PHYSICAL)),
+        analysis.relations());
+  }
+
+  @Test
+  @DisplayName("alias without AS keyword is preserved")
+  void shouldCaptureBareAlias() {
+    var analysis = PostgresQueryAnalyzer.analyze("SELECT * FROM users AS u");
+
+    assertEquals("u", analysis.relations().getFirst().alias());
+  }
+
+  @Test
+  @DisplayName("star projection reports star column reference")
+  void shouldReportStarColumn() {
+    var analysis = PostgresQueryAnalyzer.analyze("SELECT *, t.* FROM t");
+
+    assertTrue(analysis.features().contains(QueryFeature.STAR_PROJECTION));
+    assertEquals(
+        List.of(new ColumnReference(null, "*"), new ColumnReference("t", "*")), analysis.columns());
+    assertTrue(analysis.columns().getFirst().star());
+    assertNull(analysis.columns().getFirst().qualifier());
+  }
+
+  @Test
+  @DisplayName("array subscript keeps column name without subscript")
+  void shouldHandleArraySubscript() {
+    var analysis = PostgresQueryAnalyzer.analyze("SELECT tags[1] FROM posts");
+
+    assertEquals(List.of(new ColumnReference(null, "tags")), analysis.columns());
+  }
+}
