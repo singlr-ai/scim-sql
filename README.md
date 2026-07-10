@@ -1,6 +1,9 @@
 # scim-sql
 
-SCIM filter expression to parameterized SQL converter for **PostgreSQL**. Parses [RFC 7644](https://datatracker.ietf.org/doc/html/rfc7644#section-3.4.2.2) filter strings and produces SQL WHERE clauses with named parameters — safe from injection by design.
+Two independent capabilities for **PostgreSQL** in one small library:
+
+1. **SCIM filter → SQL** (`ai.singlr.scimsql`): parses [RFC 7644](https://datatracker.ietf.org/doc/html/rfc7644#section-3.4.2.2) filter strings and produces SQL WHERE clauses with named parameters — safe from injection by design. It parses SCIM filter expressions only; it does not validate full SQL.
+2. **PostgreSQL query analysis** (`ai.singlr.postgresql`): parses complete SQL statements and reports structural facts — statement kind and count, relations, columns, functions, named parameters, and policy-relevant features — without executing SQL or resolving catalog objects. See [PostgreSQL Query Analysis](#postgresql-query-analysis).
 
 The generated SQL uses PostgreSQL-specific syntax for typed values (`CAST(… AS UUID)`, `CAST(… AS timestamptz)`, `CAST(… AS jsonb)`, `@>` for JSON containment). Standard comparisons (`=`, `!=`, `LIKE`, `IN`, `IS NOT NULL`) are portable across databases. The `compareFilterBuilder` extension point allows overriding SQL generation for other databases.
 
@@ -120,6 +123,34 @@ var filter = engine.parseFilter(
 ```
 
 This lets you intercept `ComparisonFilter` instances and return a subclass with custom `toClause()` or `paramKey()` behavior.
+
+## PostgreSQL Query Analysis
+
+`PostgresQueryAnalyzer.analyze(String)` parses a complete PostgreSQL statement (or script) through EOF and returns an immutable `QueryAnalysis`:
+
+```java
+var analysis = PostgresQueryAnalyzer.analyze(
+    "SELECT u.id, count(*) FROM users u WHERE u.created_at >= :start_at GROUP BY u.id");
+
+analysis.statementKind();   // SELECT
+analysis.statementCount();  // 1
+analysis.relations();       // [RelationReference[schema=null, name=users, alias=u, kind=PHYSICAL]]
+analysis.columns();         // [u.id, u.created_at, u.id]
+analysis.functions();       // [count at 1:17]
+analysis.parameters();      // [start_at]
+analysis.features();        // []
+analysis.normalizedSql();   // deterministic form for hashing/audit
+```
+
+Key properties:
+
+- **Named parameters** (`:start_at`, `:user_id`) are first-class expression values via a deliberate, documented grammar extension. Names are reported exactly; values are never bound or substituted.
+- **Statement kinds**: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `DDL`, `UTILITY`, `UNKNOWN`. Prohibited-but-valid statements analyze successfully so callers can raise precise policy errors.
+- **Features** flag CTEs (plain/recursive/writable), subqueries, set operations, window functions, `SELECT INTO`, row locks, `LATERAL`, function/VALUES relations, star projections, and multiple statements — at any nesting depth.
+- **Relations** distinguish physical tables, CTE references, and function relations, preserving aliases and schema qualification. Classification is syntactic; the analyzer does not resolve catalog objects, authorize access, execute SQL, or decide policy.
+- **Safety**: input is bounded (length, tokens, nesting depth), errors carry only a stable reason plus line/column, and SQL text is never logged or echoed.
+
+The grammar is the [ANTLR grammars-v4](https://github.com/antlr/grammars-v4) PostgreSQL grammar, vendored at a pinned commit — see [NOTICE.md](NOTICE.md) for provenance, licenses, and the exact local modifications.
 
 ## Building
 
