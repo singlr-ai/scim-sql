@@ -50,7 +50,6 @@ import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.tree.ParseTree;
@@ -164,7 +163,8 @@ final class AnalysisCollector {
       if (cte.preparablestmt().selectstmt() == null) {
         features.add(QueryFeature.WRITABLE_CTE);
       }
-      Set<String> bodyScope = union(outerScope, names.subList(0, recursive ? i + 1 : i));
+      List<String> visibleNames = recursive ? names : names.subList(0, i);
+      Set<String> bodyScope = union(outerScope, visibleNames);
       scan(cte.preparablestmt(), bodyScope);
     }
     Set<String> fullScope = union(outerScope, names);
@@ -198,7 +198,7 @@ final class AnalysisCollector {
           functions.add(
               new FunctionReference(
                   null,
-                  special.getStart().getText().toLowerCase(Locale.ROOT),
+                  asciiLowercase(special.getStart().getText()),
                   special.getStart().getLine(),
                   special.getStart().getCharPositionInLine()));
       case PlsqlvariablenameContext parameter -> parameters.add(parameter.getText().substring(1));
@@ -260,10 +260,21 @@ final class AnalysisCollector {
     String name = parts.removeLast();
     String schema = parts.isEmpty() ? null : String.join(".", parts);
     RelationReference.Kind kind =
-        schema == null && cteScope.contains(name)
+        schema == null && isCteSource(relation) && cteScope.contains(name)
             ? RelationReference.Kind.CTE
             : RelationReference.Kind.PHYSICAL;
     relations.add(new RelationReference(schema, name, aliasFor(relation), kind));
+  }
+
+  private static boolean isCteSource(Qualified_nameContext relation) {
+    if (!(relation.getParent() instanceof Relation_exprContext expression)) {
+      return false;
+    }
+    if (!(expression.getParent() instanceof Relation_expr_opt_aliasContext target)) {
+      return true;
+    }
+    return !(target.getParent() instanceof UpdatestmtContext
+        || target.getParent() instanceof DeletestmtContext);
   }
 
   private void addColumn(ColumnrefContext column) {
@@ -319,7 +330,7 @@ final class AnalysisCollector {
         relations.add(
             new RelationReference(
                 null,
-                windowless.getStart().getText().toLowerCase(Locale.ROOT),
+                asciiLowercase(windowless.getStart().getText()),
                 alias,
                 RelationReference.Kind.FUNCTION));
       }
@@ -458,6 +469,15 @@ final class AnalysisCollector {
         && raw.charAt(raw.length() - 1) == '"') {
       return raw.substring(3, raw.length() - 1).replace("\"\"", "\"");
     }
-    return raw.toLowerCase(Locale.ROOT);
+    return asciiLowercase(raw);
+  }
+
+  static String asciiLowercase(String value) {
+    var folded = new StringBuilder(value.length());
+    value
+        .codePoints()
+        .map(codePoint -> codePoint >= 'A' && codePoint <= 'Z' ? codePoint + 32 : codePoint)
+        .forEach(folded::appendCodePoint);
+    return folded.toString();
   }
 }

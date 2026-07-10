@@ -26,6 +26,9 @@ class StatementClassificationTest {
           UPDATE t SET a = 1                                    | UPDATE
           DELETE FROM t                                         | DELETE
           MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET a = 1 WHEN NOT MATCHED THEN INSERT VALUES (1) | MERGE
+          MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN DO NOTHING | MERGE
+          MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN DO NOTHING | MERGE
+          MERGE INTO t USING s ON t.id = s.id WHEN MATCHED AND t.a > 1 THEN UPDATE SET a = 2 WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT DEFAULT VALUES | MERGE
           CREATE TABLE t (id int)                               | DDL
           CREATE INDEX idx ON t (id)                            | DDL
           CREATE VIEW v AS SELECT 1                             | DDL

@@ -55,6 +55,14 @@ class NormalizationTest {
   }
 
   @Test
+  @DisplayName("non-ascii identifier case changes the normalized form")
+  void shouldPreserveNonAsciiIdentifierCase() {
+    assertEquals("select marker from Таблица", normalize("SELECT marker FROM Таблица"));
+    assertNotEquals(
+        normalize("SELECT marker FROM Таблица"), normalize("SELECT marker FROM таблица"));
+  }
+
+  @Test
   @DisplayName("quoted identifier case changes the normalized form")
   void shouldDifferOnQuotedIdentifierCase() {
     assertNotEquals(

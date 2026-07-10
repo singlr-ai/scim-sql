@@ -7,7 +7,6 @@ package ai.singlr.postgresql;
 
 import ai.singlr.postgresql.parser.PostgreSQLLexer;
 import ai.singlr.postgresql.parser.PostgreSQLParser;
-import java.util.Locale;
 import java.util.Set;
 import org.antlr.v4.runtime.BailErrorStrategy;
 import org.antlr.v4.runtime.BaseErrorListener;
@@ -170,7 +169,8 @@ public final class PostgresQueryAnalyzer {
         normalized.append(isStringLiteral(previousType) && isStringLiteral(type) ? '\n' : ' ');
       }
       var text = token.getText();
-      normalized.append(VERBATIM_TOKEN_TYPES.contains(type) ? text : text.toLowerCase(Locale.ROOT));
+      normalized.append(
+          VERBATIM_TOKEN_TYPES.contains(type) ? text : AnalysisCollector.asciiLowercase(text));
       previousType = type;
     }
     return normalized.toString();

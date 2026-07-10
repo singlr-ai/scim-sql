@@ -233,6 +233,68 @@ class PostgresQueryAnalyzerTest {
   }
 
   @Test
+  @DisplayName("CTE name never hides an insert target")
+  void shouldKeepInsertTargetPhysicalDespiteCteName() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "WITH target AS (SELECT 1 AS id) INSERT INTO target SELECT id FROM target");
+
+    var kinds = analysis.relations().stream().map(r -> r.name() + ":" + r.kind()).toList();
+    assertEquals(List.of("target:PHYSICAL", "target:CTE"), kinds);
+  }
+
+  @Test
+  @DisplayName("CTE name never hides update and delete targets")
+  void shouldKeepUpdateAndDeleteTargetsPhysicalDespiteCteName() {
+    var update =
+        PostgresQueryAnalyzer.analyze(
+            "WITH target AS (SELECT 1 AS id) UPDATE target SET id = 2 FROM target");
+    var updateKinds = update.relations().stream().map(r -> r.name() + ":" + r.kind()).toList();
+    assertEquals(List.of("target:PHYSICAL", "target:CTE"), updateKinds);
+
+    var delete =
+        PostgresQueryAnalyzer.analyze(
+            "WITH target AS (SELECT 1 AS id) DELETE FROM target USING target t WHERE t.id = 1");
+    var deleteKinds = delete.relations().stream().map(r -> r.name() + ":" + r.kind()).toList();
+    assertEquals(List.of("target:PHYSICAL", "target:CTE"), deleteKinds);
+  }
+
+  @Test
+  @DisplayName("CTE name never hides a select into target")
+  void shouldKeepSelectIntoTargetPhysicalDespiteCteName() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "WITH target AS (SELECT 1 AS id) SELECT id INTO target FROM target");
+
+    var kinds = analysis.relations().stream().map(r -> r.name() + ":" + r.kind()).toList();
+    assertEquals(List.of("target:PHYSICAL", "target:CTE"), kinds);
+  }
+
+  @Test
+  @DisplayName("recursive CTE sees later sibling CTE")
+  void shouldScopeForwardReferenceInRecursiveWith() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "WITH RECURSIVE x AS (SELECT * FROM y), y AS (SELECT 1) SELECT * FROM x");
+
+    assertEquals(
+        List.of(
+            new RelationReference(null, "y", null, RelationReference.Kind.CTE),
+            new RelationReference(null, "x", null, RelationReference.Kind.CTE)),
+        analysis.relations());
+  }
+
+  @Test
+  @DisplayName("identifier folding is ascii-only so distinct unicode names stay distinct")
+  void shouldFoldOnlyAsciiIdentifierCase() {
+    var upper = PostgresQueryAnalyzer.analyze("SELECT marker FROM Таблица");
+    var lower = PostgresQueryAnalyzer.analyze("SELECT marker FROM таблица");
+
+    assertEquals("Таблица", upper.relations().getFirst().name());
+    assertEquals("таблица", lower.relations().getFirst().name());
+  }
+
+  @Test
   @DisplayName("functions are captured in select, where, join, group, window and from")
   void shouldCaptureFunctionsEverywhere() {
     var analysis =

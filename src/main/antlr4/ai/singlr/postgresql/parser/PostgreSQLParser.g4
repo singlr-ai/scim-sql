@@ -2842,22 +2842,21 @@ returning_clause
 
 // https://www.postgresql.org/docs/current/sql-merge.html
 mergestmt
-    : MERGE INTO? qualified_name alias_clause? USING (select_with_parens | qualified_name) alias_clause? ON a_expr (
-        merge_insert_clause merge_update_clause?
-        | merge_update_clause merge_insert_clause?
-    ) merge_delete_clause?
+    : MERGE INTO? qualified_name alias_clause?
+      USING (select_with_parens | qualified_name) alias_clause?
+      ON a_expr merge_when_clause+
     ;
 
-merge_insert_clause
-    : WHEN NOT MATCHED (AND a_expr)? THEN? INSERT (OPEN_PAREN insert_column_list CLOSE_PAREN)? values_clause
-    ;
-
-merge_update_clause
-    : WHEN MATCHED (AND a_expr)? THEN? UPDATE SET set_clause_list
-    ;
-
-merge_delete_clause
-    : WHEN MATCHED THEN? DELETE_P
+merge_when_clause
+    : WHEN MATCHED (AND a_expr)? THEN? (
+        UPDATE SET set_clause_list
+        | DELETE_P
+        | DO NOTHING
+    )
+    | WHEN NOT MATCHED (AND a_expr)? THEN? (
+        INSERT (OPEN_PAREN insert_column_list CLOSE_PAREN)? (values_clause | DEFAULT VALUES)
+        | DO NOTHING
+    )
     ;
 
 deletestmt
