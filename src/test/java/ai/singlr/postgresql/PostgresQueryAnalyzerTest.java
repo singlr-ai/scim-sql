@@ -261,6 +261,32 @@ class PostgresQueryAnalyzerTest {
   }
 
   @Test
+  @DisplayName("merge accepts a leading with clause and resolves the using source as a CTE")
+  void shouldAnalyzeMergeWithCte() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "WITH src AS (SELECT id FROM staging) MERGE INTO target t USING src s"
+                + " ON t.id = s.id WHEN NOT MATCHED THEN INSERT VALUES (s.id)");
+
+    assertEquals(StatementKind.MERGE, analysis.statementKind());
+    assertTrue(analysis.features().contains(QueryFeature.CTE));
+    var kinds = analysis.relations().stream().map(r -> r.name() + ":" + r.kind()).toList();
+    assertEquals(List.of("staging:PHYSICAL", "target:PHYSICAL", "src:CTE"), kinds);
+  }
+
+  @Test
+  @DisplayName("CTE name never hides a merge target")
+  void shouldKeepMergeTargetPhysicalDespiteCteName() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "WITH target AS (SELECT 1 AS id) MERGE INTO target USING target t"
+                + " ON target.id = t.id WHEN MATCHED THEN DO NOTHING");
+
+    var kinds = analysis.relations().stream().map(r -> r.name() + ":" + r.kind()).toList();
+    assertEquals(List.of("target:PHYSICAL", "target:CTE"), kinds);
+  }
+
+  @Test
   @DisplayName("CTE name never hides a select into target")
   void shouldKeepSelectIntoTargetPhysicalDespiteCteName() {
     var analysis =
@@ -357,6 +383,18 @@ class PostgresQueryAnalyzerTest {
         List.of(new ColumnReference(null, "kind"), new ColumnReference(null, "payload")),
         analysis.columns());
     assertEquals(Set.of("kind", "payload"), analysis.parameters());
+  }
+
+  @Test
+  @DisplayName("on conflict arbiter columns are reported")
+  void shouldReportOnConflictArbiterColumns() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze(
+            "INSERT INTO t (a) VALUES (1) ON CONFLICT (tenant_id) DO NOTHING");
+
+    assertEquals(
+        List.of(new ColumnReference(null, "a"), new ColumnReference(null, "tenant_id")),
+        analysis.columns());
   }
 
   @Test

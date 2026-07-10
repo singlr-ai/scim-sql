@@ -192,6 +192,39 @@ class HostileInputTest {
   }
 
   @Test
+  @DisplayName("identifiers longer than 63 bytes are rejected before analysis")
+  void shouldRejectOverlengthIdentifiers() {
+    var atLimit = "a".repeat(PostgresQueryAnalyzer.MAX_IDENTIFIER_BYTES);
+    for (var sql :
+        new String[] {
+          "SELECT 1 FROM " + atLimit + "x",
+          "SELECT 1 FROM \"" + atLimit + "x\"",
+          "SELECT \"" + "я".repeat(32) + "\" FROM t"
+        }) {
+      var exception =
+          assertThrows(QueryAnalysisException.class, () -> PostgresQueryAnalyzer.analyze(sql), sql);
+      assertTrue(exception.reason().contains("63 bytes"), exception.reason());
+    }
+  }
+
+  @Test
+  @DisplayName("identifiers at exactly 63 bytes parse, measured after quote unescaping")
+  void shouldAcceptIdentifiersAtByteLimit() {
+    var atLimit = "a".repeat(PostgresQueryAnalyzer.MAX_IDENTIFIER_BYTES);
+    assertEquals(
+        atLimit,
+        PostgresQueryAnalyzer.analyze("SELECT 1 FROM " + atLimit).relations().getFirst().name());
+
+    var escaped = "a".repeat(62) + "\"\"";
+    assertEquals(
+        "a".repeat(62) + "\"",
+        PostgresQueryAnalyzer.analyze("SELECT 1 FROM \"" + escaped + "\"")
+            .relations()
+            .getFirst()
+            .name());
+  }
+
+  @Test
   @DisplayName("dollar tag confusion does not break statement counting")
   void shouldHandleDollarTagTricks() {
     var analysis = PostgresQueryAnalyzer.analyze("SELECT $a$ $b$ ; $a$, $b$x$b$ FROM t");

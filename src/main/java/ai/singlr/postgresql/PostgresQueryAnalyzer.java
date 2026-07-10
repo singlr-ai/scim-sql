@@ -7,6 +7,7 @@ package ai.singlr.postgresql;
 
 import ai.singlr.postgresql.parser.PostgreSQLLexer;
 import ai.singlr.postgresql.parser.PostgreSQLParser;
+import java.nio.charset.StandardCharsets;
 import java.util.Set;
 import org.antlr.v4.runtime.BailErrorStrategy;
 import org.antlr.v4.runtime.BaseErrorListener;
@@ -32,10 +33,12 @@ import org.antlr.v4.runtime.misc.ParseCancellationException;
  * hostile input. SQL text and literal content never appear in exception messages and are never
  * logged.
  *
- * <p>Two lexically valid PostgreSQL forms are rejected outright because they cannot be analyzed
+ * <p>Three lexically valid PostgreSQL forms are rejected outright because they cannot be analyzed
  * faithfully: psql meta-commands (backslash commands), which are not SQL and could smuggle
- * executable commands past analysis, and Unicode-escaped identifiers ({@code U&"..."}), whose
- * effective name differs from their spelling and could evade name-based policies.
+ * executable commands past analysis, Unicode-escaped identifiers ({@code U&"..."}), whose effective
+ * name differs from their spelling and could evade name-based policies, and identifiers longer than
+ * {@value #MAX_IDENTIFIER_BYTES} UTF-8 bytes, which PostgreSQL silently truncates so the reported
+ * name would differ from the one the server resolves.
  */
 public final class PostgresQueryAnalyzer {
 
@@ -47,6 +50,9 @@ public final class PostgresQueryAnalyzer {
 
   /** Maximum accepted parenthesis and bracket nesting depth. */
   public static final int MAX_NESTING_DEPTH = 128;
+
+  /** Maximum accepted identifier length in UTF-8 bytes, matching a default NAMEDATALEN build. */
+  public static final int MAX_IDENTIFIER_BYTES = 63;
 
   private static final Set<Integer> VERBATIM_TOKEN_TYPES =
       Set.of(
@@ -124,6 +130,7 @@ public final class PostgresQueryAnalyzer {
             token.getLine(),
             token.getCharPositionInLine());
       }
+      checkIdentifierLength(token, type);
       if (type == PostgreSQLLexer.OPEN_PAREN || type == PostgreSQLLexer.OPEN_BRACKET) {
         depth++;
         if (depth > MAX_NESTING_DEPTH) {
@@ -135,6 +142,22 @@ public final class PostgresQueryAnalyzer {
       } else if (type == PostgreSQLLexer.CLOSE_PAREN || type == PostgreSQLLexer.CLOSE_BRACKET) {
         depth = Math.max(0, depth - 1);
       }
+    }
+  }
+
+  private static void checkIdentifierLength(Token token, int type) {
+    if (type != PostgreSQLLexer.Identifier && type != PostgreSQLLexer.QuotedIdentifier) {
+      return;
+    }
+    String identifier = token.getText();
+    if (type == PostgreSQLLexer.QuotedIdentifier) {
+      identifier = identifier.substring(1, identifier.length() - 1).replace("\"\"", "\"");
+    }
+    if (identifier.getBytes(StandardCharsets.UTF_8).length > MAX_IDENTIFIER_BYTES) {
+      throw new QueryAnalysisException(
+          "identifiers longer than " + MAX_IDENTIFIER_BYTES + " bytes are not supported",
+          token.getLine(),
+          token.getCharPositionInLine());
     }
   }
 

@@ -2842,7 +2842,7 @@ returning_clause
 
 // https://www.postgresql.org/docs/current/sql-merge.html
 mergestmt
-    : MERGE INTO? qualified_name alias_clause?
+    : with_clause_? MERGE INTO? qualified_name alias_clause?
       USING (select_with_parens | qualified_name) alias_clause?
       ON a_expr merge_when_clause+
     ;

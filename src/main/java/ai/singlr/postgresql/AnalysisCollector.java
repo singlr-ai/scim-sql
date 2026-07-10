@@ -18,6 +18,7 @@ import ai.singlr.postgresql.parser.PostgreSQLParser.Func_expr_common_subexprCont
 import ai.singlr.postgresql.parser.PostgreSQLParser.Func_expr_windowlessContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Func_nameContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Func_tableContext;
+import ai.singlr.postgresql.parser.PostgreSQLParser.Index_elemContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Insert_column_itemContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Insert_targetContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.InsertstmtContext;
@@ -150,6 +151,7 @@ final class AnalysisCollector {
       case InsertstmtContext c -> c.with_clause_() != null ? c.with_clause_().with_clause() : null;
       case UpdatestmtContext c -> c.with_clause_() != null ? c.with_clause_().with_clause() : null;
       case DeletestmtContext c -> c.with_clause_() != null ? c.with_clause_().with_clause() : null;
+      case MergestmtContext c -> c.with_clause_() != null ? c.with_clause_().with_clause() : null;
       default -> null;
     };
   }
@@ -217,6 +219,8 @@ final class AnalysisCollector {
           columns.add(new ColumnReference(null, identifierText(item.colid())));
       case Set_targetContext target ->
           columns.add(new ColumnReference(null, identifierText(target.colid())));
+      case Index_elemContext item when item.colid() != null ->
+          columns.add(new ColumnReference(null, identifierText(item.colid())));
       case Join_qualContext join when join.USING() != null ->
           join.name_list()
               .name()
@@ -302,6 +306,9 @@ final class AnalysisCollector {
   }
 
   private static boolean isCteSource(Qualified_nameContext relation) {
+    if (relation.getParent() instanceof MergestmtContext merge) {
+      return merge.qualified_name().size() > 1 && merge.qualified_name(1) == relation;
+    }
     if (!(relation.getParent() instanceof Relation_exprContext expression)) {
       return false;
     }
