@@ -4355,8 +4355,11 @@ iconst
     | HexadecimalIntegral
     ;
 
+// PostgreSQL concatenates adjacent string constants separated only by whitespace containing
+// at least one newline, where the continuation is a plain quoted string. Same-line adjacency
+// stays a syntax error.
 sconst
-    : anysconst uescape_?
+    : anysconst ({this.IsStringContinuation()}? StringConstant)* uescape_?
     ;
 
 anysconst

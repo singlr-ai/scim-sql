@@ -147,6 +147,51 @@ class HostileInputTest {
   }
 
   @Test
+  @DisplayName("deeply nested block comments lex in linear time and constant stack")
+  void shouldHandleDeepBlockCommentNesting() {
+    var sql = "SELECT 1 " + "/*".repeat(5_000) + "x" + "*/".repeat(5_000);
+    assertTimeoutPreemptively(
+        Duration.ofSeconds(5),
+        () -> assertEquals(1, PostgresQueryAnalyzer.analyze(sql).statementCount()));
+  }
+
+  @Test
+  @DisplayName("unterminated nested block comment is rejected")
+  void shouldRejectUnterminatedBlockComment() {
+    assertThrows(
+        QueryAnalysisException.class, () -> PostgresQueryAnalyzer.analyze("SELECT 1 /* /* x */"));
+    assertThrows(QueryAnalysisException.class, () -> PostgresQueryAnalyzer.analyze("SELECT 1 /*"));
+  }
+
+  @Test
+  @DisplayName("psql meta-commands are rejected, never treated as statement separators")
+  void shouldRejectPsqlMetaCommands() {
+    for (var sql :
+        new String[] {
+          "SELECT 1; \\! id\n",
+          "SELECT 1;\n\\echo pwned\n",
+          "\\copy secrets TO '/tmp/out'",
+          "SELECT 1\\; SELECT 2;"
+        }) {
+      assertThrows(QueryAnalysisException.class, () -> PostgresQueryAnalyzer.analyze(sql), sql);
+    }
+  }
+
+  @Test
+  @DisplayName("unicode escaped identifiers are rejected, unicode escaped strings parse")
+  void shouldRejectUnicodeEscapedIdentifiers() {
+    var exception =
+        assertThrows(
+            QueryAnalysisException.class,
+            () -> PostgresQueryAnalyzer.analyze("SELECT * FROM U&\"d\\0061t\""));
+    assertTrue(exception.reason().contains("unicode"));
+    assertThrows(
+        QueryAnalysisException.class,
+        () -> PostgresQueryAnalyzer.analyze("SELECT * FROM U&\"d!0061t\" UESCAPE '!'"));
+    assertEquals(1, PostgresQueryAnalyzer.analyze("SELECT U&'\\0061'").statementCount());
+  }
+
+  @Test
   @DisplayName("dollar tag confusion does not break statement counting")
   void shouldHandleDollarTagTricks() {
     var analysis = PostgresQueryAnalyzer.analyze("SELECT $a$ $b$ ; $a$, $b$x$b$ FROM t");

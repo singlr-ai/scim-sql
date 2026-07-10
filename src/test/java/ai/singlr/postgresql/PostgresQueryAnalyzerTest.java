@@ -7,6 +7,7 @@ package ai.singlr.postgresql;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -414,5 +415,70 @@ class PostgresQueryAnalyzerTest {
     var analysis = PostgresQueryAnalyzer.analyze("SELECT tags[1] FROM posts");
 
     assertEquals(List.of(new ColumnReference(null, "tags")), analysis.columns());
+  }
+
+  @Test
+  @DisplayName("join using reports the join columns")
+  void shouldReportJoinUsingColumns() {
+    var analysis =
+        PostgresQueryAnalyzer.analyze("SELECT a.id FROM a JOIN b USING (tenant_id, secret)");
+
+    assertEquals(
+        List.of(
+            new ColumnReference("a", "id"),
+            new ColumnReference(null, "tenant_id"),
+            new ColumnReference(null, "secret")),
+        analysis.columns());
+  }
+
+  @Test
+  @DisplayName("drop table and drop view report their target relations")
+  void shouldReportDroppedRelations() {
+    var dropTable = PostgresQueryAnalyzer.analyze("DROP TABLE private.users, audit");
+
+    assertEquals(StatementKind.DDL, dropTable.statementKind());
+    assertEquals(
+        List.of(
+            new RelationReference("private", "users", null, RelationReference.Kind.PHYSICAL),
+            new RelationReference(null, "audit", null, RelationReference.Kind.PHYSICAL)),
+        dropTable.relations());
+    assertEquals(
+        List.of(new RelationReference("private", "v", null, RelationReference.Kind.PHYSICAL)),
+        PostgresQueryAnalyzer.analyze("DROP VIEW IF EXISTS private.v").relations());
+    assertEquals(
+        List.of(new RelationReference(null, "m", null, RelationReference.Kind.PHYSICAL)),
+        PostgresQueryAnalyzer.analyze("DROP MATERIALIZED VIEW m").relations());
+    assertEquals(
+        List.of(new RelationReference(null, "f", null, RelationReference.Kind.PHYSICAL)),
+        PostgresQueryAnalyzer.analyze("DROP FOREIGN TABLE f").relations());
+  }
+
+  @Test
+  @DisplayName("drop of non-relation objects reports no relations")
+  void shouldNotReportNonRelationDrops() {
+    assertEquals(List.of(), PostgresQueryAnalyzer.analyze("DROP COLLATION c").relations());
+    assertEquals(List.of(), PostgresQueryAnalyzer.analyze("DROP INDEX idx").relations());
+    assertEquals(List.of(), PostgresQueryAnalyzer.analyze("DROP SCHEMA s").relations());
+  }
+
+  @Test
+  @DisplayName("string constants separated by a newline concatenate as in postgresql")
+  void shouldAcceptNewlineConcatenatedStrings() {
+    assertEquals(1, PostgresQueryAnalyzer.analyze("SELECT 'a'\n'b'").statementCount());
+    assertEquals(
+        1, PostgresQueryAnalyzer.analyze("SELECT 'a' -- note\n 'b'\n'c'").statementCount());
+    assertEquals(
+        1, PostgresQueryAnalyzer.analyze("SELECT U&'d!0061t'\n'x' UESCAPE '!'").statementCount());
+  }
+
+  @Test
+  @DisplayName("string adjacency without a plain newline separation stays a syntax error")
+  void shouldRejectSameLineStringAdjacency() {
+    assertThrows(
+        QueryAnalysisException.class, () -> PostgresQueryAnalyzer.analyze("SELECT 'a' 'b'"));
+    assertThrows(
+        QueryAnalysisException.class, () -> PostgresQueryAnalyzer.analyze("SELECT 'a' /*\n*/ 'b'"));
+    assertThrows(
+        QueryAnalysisException.class, () -> PostgresQueryAnalyzer.analyze("SELECT $$a$$\n'b'"));
   }
 }

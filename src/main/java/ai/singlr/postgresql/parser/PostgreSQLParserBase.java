@@ -127,6 +127,32 @@ public abstract class PostgreSQLParserBase extends Parser {
         return parser;
     }
 
+    // scim-sql local modification: implements PostgreSQL's scanner-level string continuation
+    // (scan.l {quotecontinue}): a quoted constant continues a preceding quote-style constant
+    // only when separated by horizontal whitespace and line comments with at least one newline.
+    // Block comments do not qualify, and dollar-quoted strings never continue.
+    public boolean IsStringContinuation() {
+        var stream = (CommonTokenStream) getInputStream();
+        var previous = stream.LT(-1);
+        if (previous == null || previous.getType() == PostgreSQLLexer.EndDollarStringConstant) {
+            return false;
+        }
+        var hidden = stream.getHiddenTokensToLeft(stream.LT(1).getTokenIndex());
+        if (hidden == null) {
+            return false;
+        }
+        var sawNewline = false;
+        for (var token : hidden) {
+            var type = token.getType();
+            if (type == PostgreSQLLexer.Newline) {
+                sawNewline = true;
+            } else if (type != PostgreSQLLexer.Whitespace && type != PostgreSQLLexer.LineComment) {
+                return false;
+            }
+        }
+        return sawNewline;
+    }
+
     public boolean OnlyAcceptableOps()
     {
         var c = ((CommonTokenStream)this.getInputStream()).LT(1);

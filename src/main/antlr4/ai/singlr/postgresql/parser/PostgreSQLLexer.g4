@@ -43,6 +43,12 @@ options {
     caseInsensitive = true;
 }
 
+// BlockComment is assembled across BlockCommentMode rules via more(), so no single rule
+// defines it; EndBlockComment() stamps this type on the finished token.
+tokens {
+    BlockComment
+}
+
 
 // Insert here @header for C++ lexer.
 
@@ -1355,32 +1361,16 @@ Newline: ('\r' '\n'? | '\n') -> channel (HIDDEN);
 
 LineComment: '--' ~ [\r\n]* -> channel (HIDDEN);
 
-BlockComment:
-    ('/*' ('/'* BlockComment | ~ [/*] | '/'+ ~ [/*] | '*'+ ~ [/*])* '*'* '*/') -> channel (HIDDEN)
-;
+// Nested block comments are scanned with an explicit mode and depth counter so lexing stays
+// linear-time and constant-stack on adversarial nesting. An unterminated comment becomes an
+// ErrorCharacter token, which the parser rejects.
 
-UnterminatedBlockComment:
-    '/*' (
-        '/'* BlockComment
-        | // these characters are not part of special sequences in a block comment
-        ~ [/*]
-        | // handle / or * characters which are not part of /* or */ and do not appear at the end of the file
-        ('/'+ ~ [/*] | '*'+ ~ [/*])
-    )*
-    // Handle the case of / or * characters at the end of the file, or a nested unterminated block comment
-    ('/'+ | '*'+ | '/'* UnterminatedBlockComment)?
-    // Optional assertion to make sure this rule is working as intended
-    {this.UnterminatedBlockCommentDebugAssert();}
-;
+BlockCommentStart: '/*' {this.commentDepth = 1;} -> pushMode(BlockCommentMode), more;
 //
 
-// META-COMMANDS
-
-//
-
-// http://www.postgresql.org/docs/9.3/static/app-psql.html
-
-MetaCommand: '\\' -> pushMode(META), more ;
+// psql meta-commands (backslash commands) are deliberately NOT recognized: they are not
+// PostgreSQL SQL, and treating them as statement separators would let executable commands
+// pass structural analysis unreported. A backslash lexes as ErrorCharacter and fails closed.
 
 //
 
@@ -1471,6 +1461,8 @@ DollarText:
 EndDollarStringConstant: ('$' Tag? '$') {this.IsTag()}?
     {this.PopTag();} -> popMode;
 
-mode META;
-MetaSemi : {this.IsSemiColon()}? ';' -> type(SEMI), popMode ;
-MetaOther : ~[;\r\n\\"] .*? ('\\\\' | [\r\n]+) -> type(SEMI), popMode ;
+mode BlockCommentMode;
+BlockCommentNested: '/*' {this.commentDepth++;} -> more;
+BlockCommentEnd: '*/' {this.EndBlockComment();};
+BlockCommentChar: . -> more;
+BlockCommentEof: EOF -> type(ErrorCharacter), popMode;

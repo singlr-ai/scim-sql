@@ -29,6 +29,7 @@ import java.util.Stack;
 
 public abstract class PostgreSQLLexerBase extends Lexer {
     protected final Stack<String> tags = new Stack<>();
+    protected int commentDepth;
 
     protected PostgreSQLLexerBase(CharStream input) {
         super(input);
@@ -47,8 +48,18 @@ public abstract class PostgreSQLLexerBase extends Lexer {
         tags.pop();
     }
 
-    public void UnterminatedBlockCommentDebugAssert() {
-        //Debug.Assert(InputStream.LA(1) == -1 /*EOF*/);
+    // scim-sql local modification: nested block comments are lexed iteratively with a depth
+    // counter instead of the upstream recursive rule, which was quadratic-time and could
+    // overflow the stack on adversarial nesting.
+    public void EndBlockComment() {
+        commentDepth--;
+        if (commentDepth == 0) {
+            setType(PostgreSQLLexer.BlockComment);
+            setChannel(HIDDEN);
+            popMode();
+        } else {
+            more();
+        }
     }
 
     public boolean CheckLaMinus() {
@@ -83,10 +94,5 @@ public abstract class PostgreSQLLexerBase extends Lexer {
             c = new char[]{(char) (codePoint / 0x400 + 0xd800), (char) (codePoint % 0x400 + 0xdc00)};
         }
         return Character.isLetter(c[0]);
-    }
-
-    public boolean IsSemiColon()
-    {
-        return  ';' == (char)getInputStream().LA(1);
     }
 }

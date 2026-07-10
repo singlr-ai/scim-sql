@@ -31,6 +31,11 @@ import org.antlr.v4.runtime.misc.ParseCancellationException;
  * #MAX_NESTING_DEPTH} levels of bracket nesting, which together bound parse time and memory on
  * hostile input. SQL text and literal content never appear in exception messages and are never
  * logged.
+ *
+ * <p>Two lexically valid PostgreSQL forms are rejected outright because they cannot be analyzed
+ * faithfully: psql meta-commands (backslash commands), which are not SQL and could smuggle
+ * executable commands past analysis, and Unicode-escaped identifiers ({@code U&"..."}), whose
+ * effective name differs from their spelling and could evade name-based policies.
  */
 public final class PostgresQueryAnalyzer {
 
@@ -46,7 +51,6 @@ public final class PostgresQueryAnalyzer {
   private static final Set<Integer> VERBATIM_TOKEN_TYPES =
       Set.of(
           PostgreSQLLexer.QuotedIdentifier,
-          PostgreSQLLexer.UnicodeQuotedIdentifier,
           PostgreSQLLexer.StringConstant,
           PostgreSQLLexer.UnicodeEscapeStringConstant,
           PostgreSQLLexer.EscapeStringConstant,
@@ -114,6 +118,12 @@ public final class PostgresQueryAnalyzer {
     int depth = 0;
     for (Token token : tokens.getTokens()) {
       int type = token.getType();
+      if (type == PostgreSQLLexer.UnicodeQuotedIdentifier) {
+        throw new QueryAnalysisException(
+            "unicode escaped identifiers are not supported",
+            token.getLine(),
+            token.getCharPositionInLine());
+      }
       if (type == PostgreSQLLexer.OPEN_PAREN || type == PostgreSQLLexer.OPEN_BRACKET) {
         depth++;
         if (depth > MAX_NESTING_DEPTH) {

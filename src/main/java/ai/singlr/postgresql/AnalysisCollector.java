@@ -10,6 +10,7 @@ import ai.singlr.postgresql.parser.PostgreSQLParser.Alias_clauseContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.ColumnrefContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Common_table_exprContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.DeletestmtContext;
+import ai.singlr.postgresql.parser.PostgreSQLParser.DropstmtContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.For_locking_clauseContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Func_alias_clauseContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Func_applicationContext;
@@ -21,6 +22,7 @@ import ai.singlr.postgresql.parser.PostgreSQLParser.Insert_column_itemContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Insert_targetContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.InsertstmtContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Into_clauseContext;
+import ai.singlr.postgresql.parser.PostgreSQLParser.Join_qualContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Locked_rels_listContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.MergestmtContext;
 import ai.singlr.postgresql.parser.PostgreSQLParser.Over_clauseContext;
@@ -74,6 +76,9 @@ final class AnalysisCollector {
           "grantrolestmt",
           "revokerolestmt",
           "importforeignschemastmt");
+
+  private static final Set<String> RELATION_DROP_TYPES =
+      Set.of("table", "view", "materializedview", "foreigntable");
 
   private final List<RelationReference> relations = new ArrayList<>();
   private final List<ColumnReference> columns = new ArrayList<>();
@@ -192,6 +197,7 @@ final class AnalysisCollector {
   private void inspect(ParseTree node, Set<String> cteScope) {
     switch (node) {
       case Qualified_nameContext relation -> addRelation(relation, cteScope);
+      case DropstmtContext drop -> addDroppedRelations(drop);
       case ColumnrefContext column -> addColumn(column);
       case Func_applicationContext call -> addFunction(call);
       case Func_expr_common_subexprContext special ->
@@ -211,6 +217,11 @@ final class AnalysisCollector {
           columns.add(new ColumnReference(null, identifierText(item.colid())));
       case Set_targetContext target ->
           columns.add(new ColumnReference(null, identifierText(target.colid())));
+      case Join_qualContext join when join.USING() != null ->
+          join.name_list()
+              .name()
+              .forEach(
+                  name -> columns.add(new ColumnReference(null, identifierText(name.colid()))));
       case Select_with_parensContext subquery -> {
         var parent = subquery.getParent();
         if (!(parent instanceof SelectstmtContext
@@ -264,6 +275,30 @@ final class AnalysisCollector {
             ? RelationReference.Kind.CTE
             : RelationReference.Kind.PHYSICAL;
     relations.add(new RelationReference(schema, name, aliasFor(relation), kind));
+  }
+
+  private void addDroppedRelations(DropstmtContext drop) {
+    if (drop.object_type_any_name() == null
+        || drop.any_name_list_() == null
+        || !RELATION_DROP_TYPES.contains(asciiLowercase(drop.object_type_any_name().getText()))) {
+      return;
+    }
+    for (var anyName : drop.any_name_list_().any_name()) {
+      List<String> parts = new ArrayList<>();
+      parts.add(identifierText(anyName.colid()));
+      if (anyName.attrs() != null) {
+        for (var attr : anyName.attrs().attr_name()) {
+          parts.add(identifierText(attr));
+        }
+      }
+      String name = parts.removeLast();
+      relations.add(
+          new RelationReference(
+              parts.isEmpty() ? null : String.join(".", parts),
+              name,
+              null,
+              RelationReference.Kind.PHYSICAL));
+    }
   }
 
   private static boolean isCteSource(Qualified_nameContext relation) {
@@ -463,11 +498,6 @@ final class AnalysisCollector {
     String raw = identifier.getText();
     if (raw.length() >= 2 && raw.charAt(0) == '"' && raw.charAt(raw.length() - 1) == '"') {
       return raw.substring(1, raw.length() - 1).replace("\"\"", "\"");
-    }
-    if (raw.length() >= 4
-        && (raw.startsWith("U&\"") || raw.startsWith("u&\""))
-        && raw.charAt(raw.length() - 1) == '"') {
-      return raw.substring(3, raw.length() - 1).replace("\"\"", "\"");
     }
     return asciiLowercase(raw);
   }

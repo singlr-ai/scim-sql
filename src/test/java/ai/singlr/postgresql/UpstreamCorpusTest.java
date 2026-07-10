@@ -19,6 +19,10 @@ import org.junit.jupiter.params.provider.ValueSource;
  * PostgreSQL regression examples vendored from ANTLR grammars-v4 at commit
  * 76093c04af6a51f38a67d14f7e71ff0a9b4400da (sql/postgresql/examples). Each file must analyze end to
  * end; failures indicate a regression in the vendored grammar or the analyzer.
+ *
+ * <p>Local modification: psql meta-command lines ({@code \d+}, {@code \set}) were removed and
+ * client-side {@code \;} separators replaced with plain {@code ;}, because the analyzer
+ * deliberately rejects psql meta-commands as non-SQL.
  */
 @DisplayName("Upstream regression corpus")
 class UpstreamCorpusTest {
